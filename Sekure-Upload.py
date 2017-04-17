@@ -4,6 +4,7 @@ import boto3
 import magic
 import config
 import re
+import json
 
 def main():
 #  Variables
@@ -20,7 +21,7 @@ def main():
     check_folder(base_dir)
     check_folder(upload_dir)
     recurse(upload_dir)
-    # move_files(upload_dir, archived)
+    move_files(upload_dir, archived)
     check_folder(upload_dir)
 
 
@@ -44,28 +45,49 @@ def recurse(base_folder):
             if file_size > config.max_file_size:
                 print "File too large to upload"
                 print "Check Max upload size"
-                break
+                print "Error: " + current_file
             else:
-                upload(current_file, s3_path, file_size)
+                upload(current_file, filename, root, file_size, base_folder)
 
 
 
 # This Function uploads
-def upload(file_path, aws_path, file_size):
+def upload(file_path, filename, directory, file_size, base_folder):
+    localdir = os.path.relpath(directory, base_folder )
+    localdir = '/' + localdir
     hash_id = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     time_stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     s3_path = filename + "-" + hash_id
+    s3_path.replace(" ", "-")
     mime = magic.from_file(file_path, mime=True)
+
+    # Json for lambda
+    payload = {
+        "folder": localdir,
+        "name": filename,
+        "mime": mime,
+        "size": file_size,
+        "created": time_stamp,
+        "s3": s3_path
+    }
+    print "s3 path"
+    print s3_path
 
     # Upload File to S3 as with encryption
     s3 = boto3.resource('s3')
     data = open(file_path, 'rb')
-    s3.Bucket(config.bucketName).put_object(Key=aws_path, Body=data, ContentType=mime, ServerSideEncryption='AES256')
+    s3.Bucket(config.bucketName).put_object(Key=s3_path, Body=data, ContentType=mime, ServerSideEncryption='AES256')
 
 
-    print "Upload complete"
-    print "File path: " + file_path
-    print "AWS path: " + aws_path
-    print "MIME: " + mime
-    print ""
+    client = boto3.client('lambda')
+    response = client.invoke(
+        FunctionName=config.lambdaUpload,
+        InvocationType="RequestResponse",
+        LogType='Tail',
+        Payload=json.dumps(payload)
+    )
+    print(response)
+
+
 main()
+print "Upload complete"
